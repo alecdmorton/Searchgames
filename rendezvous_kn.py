@@ -359,7 +359,7 @@ class EquilibriumFinder:
             emt = weights_new @ self.M_avg @ weights_new
             history.append(emt)
 
-            if self.verbose and t % 25 == 0:
+            if self.verbose and t % 100 == 0:
                 print(f"  iter {t:4d}  |  EMT = {emt:.4f}  |  support = "
                       f"{np.sum(weights_new > 1e-6)}")
 
@@ -627,13 +627,16 @@ def run(n: int = 4, verbose: bool = True):
     game = RendezvousGame(n)
 
     # ── build the route pool ─────────────────────────────────────────────
+    rng_pool = np.random.default_rng(0)
     if n <= 6:
         pool = all_permutation_routes(n)
         pool += canonical_strategies(n)
     else:
-        rng = np.random.default_rng(0)
-        pool = sampled_permutation_routes(n, min(300, n * 40), rng)
+        pool = sampled_permutation_routes(n, min(300, n * 40), rng_pool)
         pool += canonical_strategies(n)
+    # Include AW-style block routes so fictitious play can discover
+    # Anderson–Weber-like mixtures from the same strategy space
+    pool += aw_block_routes(n, count=100, rng=rng_pool)
     # deduplicate
     seen = set()
     unique = []
@@ -648,7 +651,7 @@ def run(n: int = 4, verbose: bool = True):
     # ── equilibrium search ───────────────────────────────────────────────
     print(f"\n  ▸ Launching best-response dynamics …\n")
     finder = EquilibriumFinder(game, route_pool=pool, verbose=verbose)
-    eq = finder.fictitious_play(max_iter=400)
+    eq = finder.fictitious_play(max_iter=2000)
 
     # ── report ───────────────────────────────────────────────────────────
     eq_strat = finder.to_strategy(eq["weights"])
@@ -835,9 +838,11 @@ def compare_across_n(n_values: list[int] = None,
     print(f"   VALIDATION AGAINST PUBLISHED LITERATURE")
     print(f"{sep}")
     print()
-    print("  The simulation searches over *fixed deterministic routes* via fictitious play.")
-    print("  The Anderson–Weber (AW) strategy uses *behavioural randomisation* (coin flips")
-    print("  each block), which is strictly more expressive — so AW EMT ≤ Sim EMT is expected.")
+    print("  The simulation searches over a finite pool of routes via fictitious play.")
+    print("  The Anderson–Weber (AW) benchmark is computed by Monte Carlo simulation.")
+    print("  Since players acquire no information during play, mixed strategies over fixed")
+    print("  routes are equivalent to behavioural strategies — any gap is due to finite")
+    print("  iterations or incomplete route pools, not a structural difference.")
     print()
 
     # ── AW validation (this should match literature closely) ─────────
