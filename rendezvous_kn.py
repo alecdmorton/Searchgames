@@ -237,6 +237,40 @@ def canonical_strategies(n: int) -> list[list[int]]:
     return [patient, sweeper, bouncer, list(gambler)]
 
 
+def aw_block_routes(n: int, count: int = 50,
+                    rng: np.random.Generator = None) -> list[list[int]]:
+    """
+    Generate Anderson–Weber-style block routes of length 2*(n−1).
+
+    Each route represents TWO blocks of the AW strategy.  Within each
+    block the player either stays (repeats current node n−1 times) or
+    tours (visits all other nodes in a random permutation).
+
+    This enriches the strategy pool so the equilibrium finder can
+    discover AW-like mixtures.
+    """
+    if rng is None:
+        rng = np.random.default_rng(99)
+    block = n - 1
+    routes = set()
+    for _ in range(count * 5):
+        route = []
+        pos = 0
+        for _ in range(2):          # two blocks
+            stay = rng.random() < 0.5
+            if stay:
+                route.extend([pos] * block)
+            else:
+                others = [x for x in range(n) if x != pos]
+                perm = list(rng.permutation(others))
+                route.extend(perm)
+                pos = perm[-1]
+        routes.add(tuple(route))
+        if len(routes) >= count:
+            break
+    return [list(r) for r in routes]
+
+
 # ─────────────────────────────────────────────────────────────────────────
 # §4  EQUILIBRIUM SEARCH  (best-response dynamics)
 # ─────────────────────────────────────────────────────────────────────────
@@ -261,12 +295,12 @@ class EquilibriumFinder:
         n = game.n
 
         if route_pool is None:
+            rng = np.random.default_rng(0)
             if n <= 6:
                 route_pool = all_permutation_routes(n)
             else:
-                rng = np.random.default_rng(0)
                 route_pool = sampled_permutation_routes(n, min(200, n * 30), rng)
-                route_pool += canonical_strategies(n)
+            route_pool += canonical_strategies(n)
         self.route_pool = route_pool
         self.K = len(route_pool)
 
@@ -596,29 +630,20 @@ def run(n: int = 4, verbose: bool = True):
     if n <= 6:
         pool = all_permutation_routes(n)
         pool += canonical_strategies(n)
-        # deduplicate
-        seen = set()
-        unique = []
-        for r in pool:
-            key = tuple(r)
-            if key not in seen:
-                seen.add(key)
-                unique.append(r)
-        pool = unique
-        print(f"  Route pool: {len(pool)} routes (full permutations + archetypes)")
     else:
         rng = np.random.default_rng(0)
         pool = sampled_permutation_routes(n, min(300, n * 40), rng)
         pool += canonical_strategies(n)
-        seen = set()
-        unique = []
-        for r in pool:
-            key = tuple(r)
-            if key not in seen:
-                seen.add(key)
-                unique.append(r)
-        pool = unique
-        print(f"  Route pool: {len(pool)} sampled routes + archetypes")
+    # deduplicate
+    seen = set()
+    unique = []
+    for r in pool:
+        key = tuple(r)
+        if key not in seen:
+            seen.add(key)
+            unique.append(r)
+    pool = unique
+    print(f"  Route pool: {len(pool)} routes (permutations + archetypes)")
 
     # ── equilibrium search ───────────────────────────────────────────────
     print(f"\n  ▸ Launching best-response dynamics …\n")
@@ -668,56 +693,284 @@ def run(n: int = 4, verbose: bool = True):
 
 
 # ─────────────────────────────────────────────────────────────────────────
-# §7  MULTI-n COMPARISON
+# §7  ANDERSON–WEBER STRATEGY (theoretical benchmark)
 # ─────────────────────────────────────────────────────────────────────────
 
-def compare_across_n(n_values: list[int] = None, save_path: str = "rendezvous_scaling.png"):
+def anderson_weber_emt(n: int, p: float = None,
+                       mc_samples: int = 100_000) -> tuple[float, float]:
     """
-    Run the equilibrium finder for several values of n and plot how the
-    equilibrium expected meeting time scales.
+    Compute the expected meeting time of the Anderson–Weber strategy on Kₙ.
+
+    The AW strategy works in blocks of (n−1) steps:
+      • With prob p:   STAY at current node for the entire block.
+      • With prob 1−p: TOUR all other (n−1) nodes in a random permutation.
+
+    If p is None, optimise over p ∈ (0, 1).
+
+    Returns (emt, p_opt).
+
+    Reference: Anderson & Weber (1990), "The Rendezvous Problem on
+    Discrete Locations", J. Appl. Probab. 27(4):839–851.
+    """
+    from scipy.optimize import minimize_scalar
+
+    rng = np.random.default_rng(42)
+    block = n - 1
+
+    def aw_emt_for_p(p_val: float) -> float:
+        if p_val <= 0 or p_val >= 1:
+            return 1e9
+        times = []
+        for _ in range(mc_samples):
+            d = rng.integers(1, n)                     # starting gap
+            t = 0
+            pos_a, pos_b = 0, d
+            met = False
+            for _ in range(50):                        # up to 50 blocks
+                coin_a = rng.random() < p_val          # True = stay
+                coin_b = rng.random() < p_val
+                if coin_a and coin_b:
+                    # both stay — no meeting this block
+                    t += block
+                elif coin_a and not coin_b:
+                    # A stays, B tours: B visits all others including A's node
+                    perm_b = rng.permutation([x for x in range(n) if x != pos_b])
+                    for step, node in enumerate(perm_b):
+                        t += 1
+                        if node == pos_a:
+                            met = True
+                            break
+                    if met:
+                        break
+                    pos_b = perm_b[-1]
+                elif not coin_a and coin_b:
+                    # B stays, A tours
+                    perm_a = rng.permutation([x for x in range(n) if x != pos_a])
+                    for step, node in enumerate(perm_a):
+                        t += 1
+                        if node == pos_b:
+                            met = True
+                            break
+                    if met:
+                        break
+                    pos_a = perm_a[-1]
+                else:
+                    # both tour
+                    perm_a = list(rng.permutation([x for x in range(n) if x != pos_a]))
+                    perm_b = list(rng.permutation([x for x in range(n) if x != pos_b]))
+                    for step in range(block):
+                        t += 1
+                        if perm_a[step] == perm_b[step]:
+                            met = True
+                            break
+                    if met:
+                        break
+                    pos_a = perm_a[-1]
+                    pos_b = perm_b[-1]
+            if not met:
+                t += block   # penalty for non-meeting
+            times.append(t)
+        return float(np.mean(times))
+
+    if p is not None:
+        return aw_emt_for_p(p), p
+
+    result = minimize_scalar(aw_emt_for_p, bounds=(0.05, 0.95), method="bounded",
+                             options={"xatol": 0.01})
+    return result.fun, result.x
+
+
+# Known exact / best-known results from the literature
+LITERATURE = {
+    # n: (EMT, source, is_exact)
+    2:  (2.0,    "Anderson & Weber 1990 — exact optimal",        True),
+    3:  (2.5,    "Weber 2012 (MOR) — exact optimal, AW p=1/3",  True),
+    4:  (3.25,   "Weber 2009 — AW ≈ 3.25 (beatable by ~0.01)", False),
+}
+# Asymptotic: 0.829n (AW upper bound), 0.638n (Dani et al. 2016 lower bound)
+AW_ASYMPTOTIC_COEFF = 0.8289
+LOWER_BOUND_COEFF = 0.638
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# §8  MULTI-n COMPARISON WITH LITERATURE VALIDATION
+# ─────────────────────────────────────────────────────────────────────────
+
+def compare_across_n(n_values: list[int] = None,
+                     save_path: str = "rendezvous_scaling.png"):
+    """
+    Run the equilibrium finder for several values of n, compute the
+    Anderson–Weber benchmark, and compare against published results.
+
+    Produces:
+      • A two-panel figure: (left) EMT vs n with literature bands,
+        (right) EMT/n ratio showing convergence toward 0.829.
+      • A printed validation table.
     """
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
     if n_values is None:
-        n_values = [2, 3, 4, 5, 6, 7, 8]
+        n_values = list(range(2, 11))
 
-    results = {}
+    sim_results = {}
+    aw_results = {}
     for n in n_values:
         print(f"\n{'─' * 40}")
         print(f"  Running n = {n} …")
         print(f"{'─' * 40}")
         _, finder, eq = run(n, verbose=False)
-        results[n] = eq["emt"]
+        sim_results[n] = eq["emt"]
 
-    # ── plot ──────────────────────────────────────────────────────────────
-    fig, ax = plt.subplots(figsize=(10, 6), facecolor="#0d1117")
-    ax.set_facecolor("#0d1117")
+        print(f"  ▸ Computing Anderson–Weber benchmark for n={n} …")
+        aw_emt, aw_p = anderson_weber_emt(n, mc_samples=50_000)
+        aw_results[n] = (aw_emt, aw_p)
+        print(f"    AW: EMT = {aw_emt:.4f},  p* = {aw_p:.4f}")
 
-    ns = sorted(results.keys())
-    emts = [results[nn] for nn in ns]
+    # ── validation table ─────────────────────────────────────────────────
+    ns = sorted(sim_results.keys())
+    sep = "═" * 92
+    print(f"\n{sep}")
+    print(f"   VALIDATION AGAINST PUBLISHED LITERATURE")
+    print(f"{sep}")
+    print()
+    print("  The simulation searches over *fixed deterministic routes* via fictitious play.")
+    print("  The Anderson–Weber (AW) strategy uses *behavioural randomisation* (coin flips")
+    print("  each block), which is strictly more expressive — so AW EMT ≤ Sim EMT is expected.")
+    print()
 
-    ax.plot(ns, emts, "o-", color="#58a6ff", lw=2.5, markersize=10,
-            markerfacecolor="#f0883e", markeredgecolor="#0d1117",
-            markeredgewidth=2, label="Equilibrium EMT")
+    # ── AW validation (this should match literature closely) ─────────
+    print(f"  {'─'*92}")
+    print(f"  ANDERSON–WEBER BENCHMARK vs LITERATURE (Monte Carlo, 50k samples)")
+    print(f"  {'─'*92}")
+    print(f"  {'n':>3s}  │ {'AW EMT':>8s}  │ {'AW p*':>6s}  │ {'Lit EMT':>8s}  │ "
+          f"{'AW/n':>6s}  │ {'AW Status':>12s}  │ Source")
+    print(f"  {'─'*3}──┼─{'─'*8}──┼─{'─'*6}──┼─{'─'*8}──┼─{'─'*6}──┼─{'─'*12}──┼─{'─'*36}")
+    for n in ns:
+        aw, aw_p = aw_results[n]
+        aw_ratio = aw / n
+        if n in LITERATURE:
+            lit, source, exact = LITERATURE[n]
+            tol = 0.15 if exact else 0.25
+            ok = abs(aw - lit) < tol
+            status = "PASS" if ok else f"OFF {aw - lit:+.3f}"
+            print(f"  {n:3d}  │ {aw:8.4f}  │ {aw_p:6.4f}  │ {lit:8.4f}  │ "
+                  f"{aw_ratio:6.4f}  │ {status:>12s}  │ {source}")
+        else:
+            print(f"  {n:3d}  │ {aw:8.4f}  │ {aw_p:6.4f}  │ {'—':>8s}  │ "
+                  f"{aw_ratio:6.4f}  │ {'—':>12s}  │ "
+                  f"asympt ≈ {AW_ASYMPTOTIC_COEFF * n:.2f}")
 
-    # reference: n/2 (random walk lower bound intuition)
-    ax.plot(ns, [nn / 2 for nn in ns], "--", color="#8b949e", lw=1.5,
-            alpha=0.6, label="$n/2$ reference")
+    # ── simulation vs AW comparison ──────────────────────────────────
+    print()
+    print(f"  {'─'*92}")
+    print(f"  SIMULATION (fixed routes, fictitious play) vs AW BENCHMARK")
+    print(f"  {'─'*92}")
+    print(f"  {'n':>3s}  │ {'Sim EMT':>8s}  │ {'AW EMT':>8s}  │ {'Gap':>7s}  │ "
+          f"{'Sim/n':>6s}  │ {'AW/n':>6s}  │ Note")
+    print(f"  {'─'*3}──┼─{'─'*8}──┼─{'─'*8}──┼─{'─'*7}──┼─{'─'*6}──┼─{'─'*6}──┼─{'─'*36}")
+    for n in ns:
+        sim = sim_results[n]
+        aw = aw_results[n][0]
+        gap = sim - aw
+        sim_r = sim / n
+        aw_r = aw / n
+        note = ""
+        if gap < 0.05:
+            note = "~matched (sim found AW-quality eq)"
+        elif gap < 0.5:
+            note = "sim slightly above AW"
+        else:
+            note = "sim above AW (restricted strategy space)"
+        print(f"  {n:3d}  │ {sim:8.4f}  │ {aw:8.4f}  │ {gap:+7.4f}  │ "
+              f"{sim_r:6.4f}  │ {aw_r:6.4f}  │ {note}")
 
-    ax.set_xlabel("n  (number of nodes in $K_n$)", color="#e6edf3", fontsize=13)
-    ax.set_ylabel("Expected Meeting Time", color="#e6edf3", fontsize=13)
-    ax.set_title("How Hard Is It to Find Each Other?",
-                 color="#e6edf3", fontsize=17, fontweight="bold", fontfamily="serif")
-    ax.legend(fontsize=11, facecolor="#161b22", edgecolor="#30363d",
-              labelcolor="#8b949e")
-    ax.tick_params(colors="#8b949e")
-    for spine in ax.spines.values():
-        spine.set_color("#30363d")
-    ax.grid(color="#21262d", alpha=0.4)
+    print(f"\n  Asymptotic reference lines:")
+    print(f"    Lower bound (Dani et al. 2016):       0.638n")
+    print(f"    AW upper bound (Anderson–Weber 1990): 0.829n")
+    print(f"    Asymmetric optimal:                   (n+1)/2")
+    print(f"    Random baseline:                      n")
+    print()
 
-    fig.tight_layout()
+    # ── FIGURE ───────────────────────────────────────────────────────────
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(18, 8), facecolor="#0d1117")
+
+    for ax in (ax1, ax2):
+        ax.set_facecolor("#0d1117")
+        ax.tick_params(colors="#8b949e")
+        for spine in ax.spines.values():
+            spine.set_color("#30363d")
+        ax.grid(color="#21262d", alpha=0.4)
+
+    emts = [sim_results[nn] for nn in ns]
+    aw_emts = [aw_results[nn][0] for nn in ns]
+    ns_arr = np.array(ns, dtype=float)
+
+    # ── Panel 1: absolute EMT ────────────────────────────────────────────
+    # shaded feasibility band
+    ax1.fill_between(ns_arr, LOWER_BOUND_COEFF * ns_arr,
+                     AW_ASYMPTOTIC_COEFF * ns_arr,
+                     alpha=0.12, color="#6f42c1",
+                     label="Feasible band [0.638n, 0.829n]")
+
+    ax1.plot(ns, emts, "o-", color="#58a6ff", lw=2.5, markersize=10,
+             markerfacecolor="#f0883e", markeredgecolor="#0d1117",
+             markeredgewidth=2, label="Simulation (fictitious play)", zorder=5)
+
+    ax1.plot(ns, aw_emts, "s--", color="#f778ba", lw=2, markersize=8,
+             markerfacecolor="#f778ba", markeredgecolor="#0d1117",
+             markeredgewidth=1.5, label="Anderson–Weber strategy", zorder=4)
+
+    # literature exact points
+    lit_ns = [n for n in ns if n in LITERATURE]
+    lit_vals = [LITERATURE[n][0] for n in lit_ns]
+    ax1.scatter(lit_ns, lit_vals, s=120, marker="*", color="#f9d423",
+                zorder=6, label="Published optimal / best known")
+
+    ax1.plot(ns_arr, ns_arr, ":", color="#8b949e", lw=1, alpha=0.5,
+             label="Random baseline ($n$)")
+    ax1.plot(ns_arr, (ns_arr + 1) / 2, ":", color="#3fb950", lw=1.5,
+             alpha=0.6, label="Asymmetric optimal ($(n+1)/2$)")
+
+    ax1.set_xlabel("$n$  (nodes in $K_n$)", color="#e6edf3", fontsize=13)
+    ax1.set_ylabel("Expected Meeting Time", color="#e6edf3", fontsize=13)
+    ax1.set_title("Rendezvous on $K_n$  —  EMT vs Literature",
+                  color="#e6edf3", fontsize=16, fontweight="bold",
+                  fontfamily="serif", pad=12)
+    ax1.legend(fontsize=9.5, facecolor="#161b22", edgecolor="#30363d",
+               labelcolor="#8b949e", loc="upper left")
+
+    # ── Panel 2: EMT / n ratio ───────────────────────────────────────────
+    ratios = [e / n for e, n in zip(emts, ns)]
+    aw_ratios = [e / n for e, n in zip(aw_emts, ns)]
+
+    ax2.axhspan(LOWER_BOUND_COEFF, AW_ASYMPTOTIC_COEFF, alpha=0.12,
+                color="#6f42c1", label="Feasible band")
+    ax2.axhline(AW_ASYMPTOTIC_COEFF, color="#f778ba", ls="--", lw=1.5,
+                alpha=0.6, label=f"AW asymptote ({AW_ASYMPTOTIC_COEFF})")
+    ax2.axhline(LOWER_BOUND_COEFF, color="#f85149", ls="--", lw=1.5,
+                alpha=0.6, label=f"Lower bound ({LOWER_BOUND_COEFF})")
+    ax2.axhline(0.5, color="#3fb950", ls=":", lw=1, alpha=0.5,
+                label="Asymmetric optimal (0.5)")
+
+    ax2.plot(ns, ratios, "o-", color="#58a6ff", lw=2.5, markersize=10,
+             markerfacecolor="#f0883e", markeredgecolor="#0d1117",
+             markeredgewidth=2, label="Simulation EMT/$n$", zorder=5)
+    ax2.plot(ns, aw_ratios, "s--", color="#f778ba", lw=2, markersize=8,
+             markerfacecolor="#f778ba", markeredgecolor="#0d1117",
+             markeredgewidth=1.5, label="AW EMT/$n$", zorder=4)
+
+    ax2.set_xlabel("$n$  (nodes in $K_n$)", color="#e6edf3", fontsize=13)
+    ax2.set_ylabel("EMT / $n$", color="#e6edf3", fontsize=13)
+    ax2.set_title("Scaling Coefficient  —  does EMT$/n$ converge?",
+                  color="#e6edf3", fontsize=16, fontweight="bold",
+                  fontfamily="serif", pad=12)
+    ax2.legend(fontsize=9.5, facecolor="#161b22", edgecolor="#30363d",
+               labelcolor="#8b949e", loc="upper right")
+    ax2.set_ylim(0.3, 1.1)
+
+    fig.tight_layout(pad=2)
     fig.savefig(save_path, dpi=180, facecolor=fig.get_facecolor())
     plt.close(fig)
     print(f"\n  ✦ Scaling figure saved → {save_path}")
