@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Rendezvous Search — Arbitrary Graphs</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <header>
+        <h1>Rendezvous Search on Arbitrary Graphs</h1>
+        <p class="subtitle">
+            Two players are dropped at distinct random nodes.
+            Each round they independently move along edges.
+            They meet when they collide. Neither knows the other's position.
+        </p>
+    </header>
+
+    <main>
+        <!-- ── LEFT PANEL: Graph Input ── -->
+        <section class="panel input-panel">
+            <h2>Graph Definition</h2>
+
+            <!-- Directed toggle -->
+            <div class="control-row">
+                <label class="toggle-label">
+                    <input type="checkbox" id="directed-toggle">
+                    <span class="toggle-slider"></span>
+                    Directed graph
+                </label>
+            </div>
+
+            <!-- Presets -->
+            <div class="control-group">
+                <label>Preset graphs:</label>
+                <div id="preset-buttons" class="preset-grid"></div>
+            </div>
+
+            <!-- Node controls -->
+            <div class="control-group">
+                <label>Nodes:</label>
+                <div class="control-row">
+                    <button id="btn-add-node" class="btn btn-small">+ Add Node</button>
+                    <button id="btn-remove-node" class="btn btn-small btn-danger">− Remove Last</button>
+                    <span id="node-count" class="badge">0 nodes</span>
+                </div>
+            </div>
+
+            <!-- Edge input -->
+            <div class="control-group">
+                <label>Add edge:</label>
+                <div class="control-row">
+                    <input type="number" id="edge-from" placeholder="from" min="0" class="input-small">
+                    <span class="arrow-label" id="edge-arrow">—</span>
+                    <input type="number" id="edge-to" placeholder="to" min="0" class="input-small">
+                    <button id="btn-add-edge" class="btn btn-small">+ Edge</button>
+                </div>
+            </div>
+
+            <!-- Edge list -->
+            <div class="control-group">
+                <label>Edges: <span id="edge-count" class="badge">0</span></label>
+                <div id="edge-list" class="edge-list"></div>
+            </div>
+
+            <!-- Canvas for graph preview -->
+            <div class="control-group">
+                <label>Preview:</label>
+                <canvas id="graph-canvas" width="400" height="300"></canvas>
+            </div>
+
+            <!-- Validation messages -->
+            <div id="validation-box" class="validation-box hidden"></div>
+
+            <!-- Run button -->
+            <button id="btn-solve" class="btn btn-primary btn-large">
+                Find Equilibrium
+            </button>
+        </section>
+
+        <!-- ── RIGHT PANEL: Results ── -->
+        <section class="panel results-panel">
+            <h2>Results</h2>
+
+            <div id="loading" class="hidden">
+                <div class="spinner"></div>
+                <p>Searching for equilibrium...</p>
+                <p class="hint">This may take a moment for larger graphs.</p>
+            </div>
+
+            <div id="results-empty">
+                <p class="placeholder-text">
+                    Define a graph and click "Find Equilibrium" to see results.
+                </p>
+            </div>
+
+            <div id="results-content" class="hidden">
+                <!-- Summary stats -->
+                <div class="stats-grid">
+                    <div class="stat-card">
+                        <div class="stat-value" id="stat-emt">—</div>
+                        <div class="stat-label">Expected Meeting Time</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-value" id="stat-support">—</div>
+                        <div class="stat-label">Support Size</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-value" id="stat-iterations">—</div>
+                        <div class="stat-label">Iterations</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-value" id="stat-converged">—</div>
+                        <div class="stat-label">Converged</div>
+                    </div>
+                </div>
+
+                <!-- Top routes table -->
+                <div class="routes-section">
+                    <h3>Top Equilibrium Routes</h3>
+                    <table id="routes-table">
+                        <thead>
+                            <tr>
+                                <th>Weight</th>
+                                <th>Start</th>
+                                <th>Route (first 8 steps)</th>
+                            </tr>
+                        </thead>
+                        <tbody id="routes-tbody"></tbody>
+                    </table>
+                </div>
+
+                <!-- Equilibrium landscape image -->
+                <div class="image-section">
+                    <h3>Equilibrium Landscape</h3>
+                    <img id="result-image" alt="Equilibrium landscape" />
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <footer>
+        <p>
+            Rendezvous Search Game Simulator — generalised from
+            the K<sub>n</sub> simulator. Based on Anderson &amp; Weber (1990).
+        </p>
+    </footer>
+
+    <script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>
